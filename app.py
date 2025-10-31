@@ -91,15 +91,18 @@ def upload_book():
     return jsonify({'message': 'Book uploaded successfully!'}), 200
 
 
-# ✅ Serve all books
+# ✅ Serve all books (FIXED base URL for Render)
 @app.route('/api/books', methods=['GET'])
 def get_books():
     conn = get_db()
     rows = conn.execute('SELECT * FROM books ORDER BY upload_date DESC').fetchall()
     conn.close()
+
+    # ⚙️ FIX: Force correct domain for Render (thumbnail & file URLs)
+    base_url = "https://new-m97f.onrender.com"
+
     books = []
     for b in rows:
-        base_url = f"https://{request.host}"
         books.append({
             'id': b['id'],
             'title': b['title'],
