@@ -50,7 +50,7 @@ def upload_book():
     author = request.form.get('author')
     category = request.form.get('category')
     desc = request.form.get('description')
-    book_file = request.files.get('book_file')
+    book_file = request.files.get('book_file') or request.files.get('file')
     thumbnail = request.files.get('thumbnail')
 
     if not all([title, author, category, book_file, thumbnail]):
@@ -86,6 +86,7 @@ def get_books():
     conn.close()
     books = []
     for b in rows:
+        base_url = f"https://{request.host}"
         books.append({
             'id': b['id'],
             'title': b['title'],
@@ -94,30 +95,37 @@ def get_books():
             'description': b['description'],
             'downloads': b['downloads'],
             'upload_date': b['upload_date'],
-            'thumbnail_url': f"https://{request.host}/thumbs/{b['thumbnail_name']}",
-            'file_url': f"https://{request.host}/booksdata/{b['file_name']}"
+            'thumbnail_url': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
+            'file_url': f"{base_url}/uploads/books/{b['file_name']}"
         })
     return jsonify(books)
 
 
-# ✅ Serve thumbnails safely
-@app.route('/thumbs/<path:filename>')
-def serve_thumbnail(filename):
-    return send_from_directory(THUMB_DIR, filename)
-
-
-# ✅ Serve book files safely
-@app.route('/booksdata/<path:filename>')
-def serve_book(filename):
+# ✅ Serve uploaded book files (for download)
+@app.route('/uploads/books/<path:filename>')
+def serve_uploaded_book(filename):
+    file_path = os.path.join(BOOKS_DIR, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
     return send_from_directory(BOOKS_DIR, filename, as_attachment=True)
 
 
-# ✅ Fallback frontend
+# ✅ Serve uploaded thumbnails (for preview)
+@app.route('/uploads/thumbnails/<path:filename>')
+def serve_uploaded_thumbnail(filename):
+    file_path = os.path.join(THUMB_DIR, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "Thumbnail not found"}), 404
+    return send_from_directory(THUMB_DIR, filename)
+
+
+# ✅ Root test route
 @app.route('/')
 def home():
-    return send_from_directory('.', 'index.html')
+    return "✅ OceanBooks backend is live!"
 
 
+# ✅ Fallback static files
 @app.route('/<path:path>')
 def static_files(path):
     return send_from_directory('.', path)
