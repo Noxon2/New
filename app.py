@@ -43,13 +43,12 @@ def get_db():
     return conn
 
 
-# ✅ Admin Login Route (Fixed)
+# ✅ Admin Login Route
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
     username = request.form.get('username')
     password = request.form.get('password')
 
-    # Static credentials — simple admin access
     if username == 'admin' and password == 'admin123':
         return jsonify({'success': True, 'message': 'Login successful!'}), 200
     else:
@@ -91,18 +90,15 @@ def upload_book():
     return jsonify({'message': 'Book uploaded successfully!'}), 200
 
 
-# ✅ Serve all books (FIXED base URL for Render)
+# ✅ Serve all books
 @app.route('/api/books', methods=['GET'])
 def get_books():
     conn = get_db()
     rows = conn.execute('SELECT * FROM books ORDER BY upload_date DESC').fetchall()
     conn.close()
-
-    # ⚙️ FIX: Force correct domain for Render (thumbnail & file URLs)
-    base_url = "https://new-m97f.onrender.com"
-
     books = []
     for b in rows:
+        base_url = f"https://{request.host}"
         books.append({
             'id': b['id'],
             'title': b['title'],
@@ -111,13 +107,36 @@ def get_books():
             'description': b['description'],
             'downloads': b['downloads'],
             'upload_date': b['upload_date'],
+            'file_name': b['file_name'],
+            'file_size': b['file_size'],
             'thumbnail_url': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
             'file_url': f"{base_url}/uploads/books/{b['file_name']}"
         })
     return jsonify(books)
 
 
-# ✅ Serve uploaded book files (for download)
+# ✅ Download book (increase count)
+@app.route('/api/books/<int:book_id>/download')
+def download_book(book_id):
+    conn = get_db()
+    book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+    if not book:
+        conn.close()
+        return jsonify({"error": "Book not found"}), 404
+
+    # Increase download count
+    conn.execute("UPDATE books SET downloads = downloads + 1 WHERE id = ?", (book_id,))
+    conn.commit()
+    conn.close()
+
+    file_path = book["file_path"]
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
+
+    return send_from_directory(BOOKS_DIR, book["file_name"], as_attachment=True)
+
+
+# ✅ Serve uploaded book files
 @app.route('/uploads/books/<path:filename>')
 def serve_uploaded_book(filename):
     file_path = os.path.join(BOOKS_DIR, filename)
@@ -126,7 +145,7 @@ def serve_uploaded_book(filename):
     return send_from_directory(BOOKS_DIR, filename, as_attachment=True)
 
 
-# ✅ Serve uploaded thumbnails (for preview)
+# ✅ Serve uploaded thumbnails
 @app.route('/uploads/thumbnails/<path:filename>')
 def serve_uploaded_thumbnail(filename):
     file_path = os.path.join(THUMB_DIR, filename)
