@@ -43,18 +43,17 @@ def get_db():
     return conn
 
 
-# ✅ Admin Login Route
+# ✅ Admin Login Route (Fixed)
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
+    username = request.form.get('username')
+    password = request.form.get('password')
 
-    # Static credentials — change if needed
+    # Static credentials — simple admin access
     if username == 'admin' and password == 'admin123':
-        return jsonify({'message': 'Login successful'}), 200
+        return jsonify({'success': True, 'message': 'Login successful!'}), 200
     else:
-        return jsonify({'error': 'Invalid credentials'}), 401
+        return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 
 # ✅ Upload book route
