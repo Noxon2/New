@@ -177,6 +177,31 @@ def serve_uploaded_book(filename):
 @app.route('/uploads/thumbnails/<path:filename>')
 def serve_uploaded_thumbnail(filename):
     return send_from_directory(THUMB_DIR, filename)
+    
+    
+    
+# ✅ Admin Stats API (for dashboard)
+@app.route('/api/admin/stats', methods=['GET'])
+def admin_stats():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM books")
+    total_books = cursor.fetchone()[0] or 0
+
+    cursor.execute("SELECT SUM(downloads) FROM books")
+    total_downloads = cursor.fetchone()[0] or 0
+
+    cursor.execute("SELECT SUM(file_size) FROM books")
+    total_size_kb = cursor.fetchone()[0] or 0
+    total_size_mb = round(total_size_kb / 1024, 2)
+
+    conn.close()
+
+    return jsonify({
+        "total_books": total_books,
+        "total_downloads": total_downloads,
+        "total_size": f"{total_size_mb} MB"
+    })
 
 
 # ✅ Root test
