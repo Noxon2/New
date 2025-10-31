@@ -29,7 +29,7 @@ def init_db():
         file_path TEXT,
         thumbnail_name TEXT,
         thumbnail_path TEXT,
-        file_size INTEGER,
+        file_size REAL,
         downloads INTEGER DEFAULT 0,
         upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
@@ -37,23 +37,22 @@ def init_db():
     conn.close()
 init_db()
 
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-# ✅ Admin Login Route
+# ✅ Admin Login
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
     username = request.form.get('username')
     password = request.form.get('password')
 
-    # Static credentials
     if username == 'admin' and password == 'admin123':
         return jsonify({'success': True, 'message': 'Login successful!'}), 200
-    else:
-        return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+    return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 
 # ✅ Upload book
@@ -79,7 +78,7 @@ def upload_book():
     book_file.save(book_path)
     thumbnail.save(thumb_path)
 
-    file_size = os.path.getsize(book_path)
+    file_size = os.path.getsize(book_path) / 1024  # in KB
 
     conn = get_db()
     conn.execute('''INSERT INTO books (title, author, category, description, file_name, file_path,
@@ -110,14 +109,14 @@ def get_books():
             'downloads': b['downloads'],
             'upload_date': b['upload_date'],
             'file_name': b['file_name'],
-            'file_size': f"{round(b['file_size']/1024, 2)} KB" if b['file_size'] else "Unknown",
+            'file_size': f"{round(b['file_size'], 2)} KB" if b['file_size'] else "Unknown",
             'thumbnail_url': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
             'file_url': f"{base_url}/uploads/books/{b['file_name']}"
         })
     return jsonify(books)
 
 
-# ✅ Update Book (PUT)
+# ✅ Update Book
 @app.route('/api/books/<int:book_id>', methods=['PUT'])
 def update_book(book_id):
     data = request.get_json()
@@ -135,7 +134,7 @@ def update_book(book_id):
     return jsonify({'success': True, 'message': 'Book updated successfully!'})
 
 
-# ✅ Delete Book (DELETE)
+# ✅ Delete Book
 @app.route('/api/books/<int:book_id>', methods=['DELETE'])
 def delete_book(book_id):
     conn = get_db()
@@ -147,7 +146,7 @@ def delete_book(book_id):
     return jsonify({'success': True, 'message': 'Book deleted successfully!'})
 
 
-# ✅ Download Book (also increase count)
+# ✅ Download Book (and increase count)
 @app.route('/api/books/<int:book_id>/download', methods=['GET'])
 def download_book(book_id):
     conn = get_db()
@@ -161,7 +160,7 @@ def download_book(book_id):
         conn.close()
         return jsonify({'error': 'File not found'}), 404
 
-    # Update download count
+    # increase download count
     conn.execute('UPDATE books SET downloads = downloads + 1 WHERE id=?', (book_id,))
     conn.commit()
     conn.close()
