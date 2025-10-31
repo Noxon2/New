@@ -43,17 +43,20 @@ def get_db():
     return conn
 
 
-# ✅ Admin Login
+# ✅ Admin Login Route (Fixed)
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
     username = request.form.get('username')
     password = request.form.get('password')
+
+    # Static credentials — simple admin access
     if username == 'admin' and password == 'admin123':
         return jsonify({'success': True, 'message': 'Login successful!'}), 200
-    return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+    else:
+        return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 
-# ✅ Upload book
+# ✅ Upload book route
 @app.route('/api/books', methods=['POST'])
 def upload_book():
     title = request.form.get('title')
@@ -79,25 +82,27 @@ def upload_book():
     file_size = os.path.getsize(book_path)
 
     conn = get_db()
-    conn.execute('''INSERT INTO books 
-        (title, author, category, description, file_name, file_path, thumbnail_name, thumbnail_path, file_size)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (title, author, category, desc, book_name, book_path, thumb_name, thumb_path, file_size))
+    conn.execute('''INSERT INTO books (title, author, category, description, file_name, file_path, thumbnail_name, thumbnail_path, file_size)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                 (title, author, category, desc, book_name, book_path, thumb_name, thumb_path, file_size))
     conn.commit()
     conn.close()
 
     return jsonify({'message': 'Book uploaded successfully!'}), 200
 
 
-# ✅ Get all books
+# ✅ Serve all books (FIXED base URL for Render)
 @app.route('/api/books', methods=['GET'])
 def get_books():
     conn = get_db()
     rows = conn.execute('SELECT * FROM books ORDER BY upload_date DESC').fetchall()
     conn.close()
+
+    # ⚙️ FIX: Force correct domain for Render (thumbnail & file URLs)
+    base_url = "https://new-m97f.onrender.com"
+
     books = []
     for b in rows:
-        base_url = f"https://{request.host}"
         books.append({
             'id': b['id'],
             'title': b['title'],
@@ -106,49 +111,37 @@ def get_books():
             'description': b['description'],
             'downloads': b['downloads'],
             'upload_date': b['upload_date'],
-            'file_name': b['file_name'],
-            'file_size': f"{round(b['file_size'] / 1024 / 1024, 2)} MB" if b['file_size'] else "0 MB",
-            'thumbnail_path': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
+            'thumbnail_url': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
             'file_url': f"{base_url}/uploads/books/{b['file_name']}"
         })
     return jsonify(books)
 
 
-# ✅ Download with count increment
-@app.route('/api/books/<int:book_id>/download', methods=['GET'])
-def download_book(book_id):
-    conn = get_db()
-    book = conn.execute('SELECT * FROM books WHERE id = ?', (book_id,)).fetchone()
-    if not book:
-        conn.close()
-        return jsonify({'error': 'Book not found'}), 404
-
-    conn.execute('UPDATE books SET downloads = downloads + 1 WHERE id = ?', (book_id,))
-    conn.commit()
-    conn.close()
-
-    file_path = book['file_path']
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'File not found'}), 404
-
-    return send_from_directory(os.path.dirname(file_path), os.path.basename(file_path), as_attachment=True)
-
-
-# ✅ Serve uploaded files
+# ✅ Serve uploaded book files (for download)
 @app.route('/uploads/books/<path:filename>')
 def serve_uploaded_book(filename):
+    file_path = os.path.join(BOOKS_DIR, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
     return send_from_directory(BOOKS_DIR, filename, as_attachment=True)
 
+
+# ✅ Serve uploaded thumbnails (for preview)
 @app.route('/uploads/thumbnails/<path:filename>')
 def serve_uploaded_thumbnail(filename):
+    file_path = os.path.join(THUMB_DIR, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "Thumbnail not found"}), 404
     return send_from_directory(THUMB_DIR, filename)
 
 
+# ✅ Root test route
 @app.route('/')
 def home():
     return "✅ OceanBooks backend is live!"
 
 
+# ✅ Fallback static files
 @app.route('/<path:path>')
 def static_files(path):
     return send_from_directory('.', path)
