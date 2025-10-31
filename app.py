@@ -49,13 +49,14 @@ def admin_login():
     username = request.form.get('username')
     password = request.form.get('password')
 
+    # Static credentials
     if username == 'admin' and password == 'admin123':
         return jsonify({'success': True, 'message': 'Login successful!'}), 200
     else:
         return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 
-# ✅ Upload book route
+# ✅ Upload book
 @app.route('/api/books', methods=['POST'])
 def upload_book():
     title = request.form.get('title')
@@ -81,7 +82,8 @@ def upload_book():
     file_size = os.path.getsize(book_path)
 
     conn = get_db()
-    conn.execute('''INSERT INTO books (title, author, category, description, file_name, file_path, thumbnail_name, thumbnail_path, file_size)
+    conn.execute('''INSERT INTO books (title, author, category, description, file_name, file_path,
+                    thumbnail_name, thumbnail_path, file_size)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                  (title, author, category, desc, book_name, book_path, thumb_name, thumb_path, file_size))
     conn.commit()
@@ -90,7 +92,7 @@ def upload_book():
     return jsonify({'message': 'Book uploaded successfully!'}), 200
 
 
-# ✅ Serve all books
+# ✅ Get all books
 @app.route('/api/books', methods=['GET'])
 def get_books():
     conn = get_db()
@@ -108,59 +110,82 @@ def get_books():
             'downloads': b['downloads'],
             'upload_date': b['upload_date'],
             'file_name': b['file_name'],
-            'file_size': b['file_size'],
+            'file_size': f"{round(b['file_size']/1024, 2)} KB" if b['file_size'] else "Unknown",
             'thumbnail_url': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
             'file_url': f"{base_url}/uploads/books/{b['file_name']}"
         })
     return jsonify(books)
 
 
-# ✅ Download book (increase count)
-@app.route('/api/books/<int:book_id>/download')
-def download_book(book_id):
-    conn = get_db()
-    book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    if not book:
-        conn.close()
-        return jsonify({"error": "Book not found"}), 404
+# ✅ Update Book (PUT)
+@app.route('/api/books/<int:book_id>', methods=['PUT'])
+def update_book(book_id):
+    data = request.get_json()
+    title = data.get('title')
+    author = data.get('author')
+    category = data.get('category')
 
-    # Increase download count
-    conn.execute("UPDATE books SET downloads = downloads + 1 WHERE id = ?", (book_id,))
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('UPDATE books SET title=?, author=?, category=? WHERE id=?',
+                (title, author, category, book_id))
     conn.commit()
     conn.close()
 
-    file_path = book["file_path"]
+    return jsonify({'success': True, 'message': 'Book updated successfully!'})
+
+
+# ✅ Delete Book (DELETE)
+@app.route('/api/books/<int:book_id>', methods=['DELETE'])
+def delete_book(book_id):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM books WHERE id=?', (book_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'success': True, 'message': 'Book deleted successfully!'})
+
+
+# ✅ Download Book (also increase count)
+@app.route('/api/books/<int:book_id>/download', methods=['GET'])
+def download_book(book_id):
+    conn = get_db()
+    book = conn.execute('SELECT * FROM books WHERE id=?', (book_id,)).fetchone()
+    if not book:
+        conn.close()
+        return jsonify({'error': 'Book not found'}), 404
+
+    file_path = book['file_path']
     if not os.path.exists(file_path):
-        return jsonify({"error": "File not found"}), 404
+        conn.close()
+        return jsonify({'error': 'File not found'}), 404
 
-    return send_from_directory(BOOKS_DIR, book["file_name"], as_attachment=True)
+    # Update download count
+    conn.execute('UPDATE books SET downloads = downloads + 1 WHERE id=?', (book_id,))
+    conn.commit()
+    conn.close()
+
+    return send_from_directory(BOOKS_DIR, os.path.basename(file_path), as_attachment=True)
 
 
-# ✅ Serve uploaded book files
+# ✅ Serve uploaded files
 @app.route('/uploads/books/<path:filename>')
 def serve_uploaded_book(filename):
-    file_path = os.path.join(BOOKS_DIR, filename)
-    if not os.path.exists(file_path):
-        return jsonify({"error": "File not found"}), 404
     return send_from_directory(BOOKS_DIR, filename, as_attachment=True)
 
 
-# ✅ Serve uploaded thumbnails
 @app.route('/uploads/thumbnails/<path:filename>')
 def serve_uploaded_thumbnail(filename):
-    file_path = os.path.join(THUMB_DIR, filename)
-    if not os.path.exists(file_path):
-        return jsonify({"error": "Thumbnail not found"}), 404
     return send_from_directory(THUMB_DIR, filename)
 
 
-# ✅ Root test route
+# ✅ Root test
 @app.route('/')
 def home():
     return "✅ OceanBooks backend is live!"
 
 
-# ✅ Fallback static files
 @app.route('/<path:path>')
 def static_files(path):
     return send_from_directory('.', path)
