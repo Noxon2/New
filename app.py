@@ -48,12 +48,9 @@ def get_db():
 def admin_login():
     username = request.form.get('username')
     password = request.form.get('password')
-
-    # Static credentials
     if username == 'admin' and password == 'admin123':
         return jsonify({'success': True, 'message': 'Login successful!'}), 200
-    else:
-        return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+    return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 
 # ✅ Upload book
@@ -100,7 +97,7 @@ def get_books():
     conn.close()
     books = []
     for b in rows:
-        base_url = f"https://{request.host}"
+        base_url = request.host_url.rstrip('/')
         books.append({
             'id': b['id'],
             'title': b['title'],
@@ -111,8 +108,8 @@ def get_books():
             'upload_date': b['upload_date'],
             'file_name': b['file_name'],
             'file_size': f"{round(b['file_size']/1024, 2)} KB" if b['file_size'] else "Unknown",
-            'thumbnail_url': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}",
-            'file_url': f"{base_url}/uploads/books/{b['file_name']}"
+            'thumbnail_path': f"{base_url}/uploads/thumbnails/{b['thumbnail_name']}" if b['thumbnail_name'] else '',
+            'file_path': f"{base_url}/uploads/books/{b['file_name']}" if b['file_name'] else ''
         })
     return jsonify(books)
 
@@ -143,11 +140,10 @@ def delete_book(book_id):
     cur.execute('DELETE FROM books WHERE id=?', (book_id,))
     conn.commit()
     conn.close()
-
     return jsonify({'success': True, 'message': 'Book deleted successfully!'})
 
 
-# ✅ Download Book (also increase count)
+# ✅ Download Book (Increase Count)
 @app.route('/api/books/<int:book_id>/download', methods=['GET'])
 def download_book(book_id):
     conn = get_db()
@@ -161,7 +157,6 @@ def download_book(book_id):
         conn.close()
         return jsonify({'error': 'File not found'}), 404
 
-    # Update download count
     conn.execute('UPDATE books SET downloads = downloads + 1 WHERE id=?', (book_id,))
     conn.commit()
     conn.close()
@@ -169,7 +164,7 @@ def download_book(book_id):
     return send_from_directory(BOOKS_DIR, os.path.basename(file_path), as_attachment=True)
 
 
-# ✅ Serve uploaded files
+# ✅ Serve Uploaded Files
 @app.route('/uploads/books/<path:filename>')
 def serve_uploaded_book(filename):
     return send_from_directory(BOOKS_DIR, filename, as_attachment=True)
@@ -180,7 +175,7 @@ def serve_uploaded_thumbnail(filename):
     return send_from_directory(THUMB_DIR, filename)
 
 
-# ✅ Root test
+# ✅ Root Test
 @app.route('/')
 def home():
     return "✅ OceanBooks backend is live!"
