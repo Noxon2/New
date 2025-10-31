@@ -1,23 +1,22 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 import sqlite3
 import os
 import uuid
 
 app = Flask(__name__, static_folder='.', static_url_path='')
-CORS(app, resources={r"/*": {"origins": "*"}})  # ✅ Allow all origins
+CORS(app)
 
-# 🔧 Safe database path (Render par likhne ki permission hoti hai /tmp folder me)
+# 🔧 Database aur upload path
 DB_PATH = '/tmp/books.db'
-
 UPLOAD_DIR = '/tmp/uploads'
 BOOKS_DIR = os.path.join(UPLOAD_DIR, 'books')
 THUMBNAILS_DIR = os.path.join(UPLOAD_DIR, 'thumbnails')
+
 os.makedirs(BOOKS_DIR, exist_ok=True)
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
-
-# 🗄️ Initialize database
+# 🗄️ Database init
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -55,9 +54,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
-
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -87,48 +84,14 @@ def get_books():
             "category": b["category"],
             "description": b["description"],
             "downloads": b["downloads"],
-            "upload_date": b["upload_date"]
+            "upload_date": b["upload_date"],
+            # ✅ Thumbnail full URL (Render URL change karna mat bhool)
+            "thumbnail_url": f"https://new-m97f.onrender.com/thumbnails/{b['thumbnail_name']}"
         })
     return jsonify(books_list)
 
 
-# 🆕 📤 Upload new book
-@app.route('/api/books', methods=['POST'])
-def upload_book():
-    try:
-        title = request.form.get('title')
-        author = request.form.get('author')
-        category = request.form.get('category')
-        description = request.form.get('description')
-        file = request.files.get('file')
-        thumbnail = request.files.get('thumbnail')
-
-        if not all([title, author, category, file, thumbnail]):
-            return jsonify({'error': 'Missing required fields'}), 400
-
-        file_name = str(uuid.uuid4()) + "_" + file.filename
-        thumb_name = str(uuid.uuid4()) + "_" + thumbnail.filename
-
-        file_path = os.path.join(BOOKS_DIR, file_name)
-        thumb_path = os.path.join(THUMBNAILS_DIR, thumb_name)
-
-        file.save(file_path)
-        thumbnail.save(thumb_path)
-
-        conn = get_db_connection()
-        conn.execute('''
-            INSERT INTO books (title, author, category, description, file_name, file_path, thumbnail_name, thumbnail_path, file_size)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (title, author, category, description, file_name, file_path, thumb_name, thumb_path, os.path.getsize(file_path)))
-        conn.commit()
-        conn.close()
-
-        return jsonify({'success': True, 'message': 'Book uploaded successfully'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# 🔐 Admin login
+# 🧠 Admin login
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
     username = request.form.get('username')
@@ -144,19 +107,64 @@ def admin_login():
         return jsonify({"error": "Invalid username or password"}), 401
 
 
-# 🧩 Serve admin folder
+# 📤 Upload Book
+@app.route('/api/books', methods=['POST'])
+def upload_book():
+    title = request.form.get('title')
+    author = request.form.get('author')
+    category = request.form.get('category')
+    description = request.form.get('description')
+    book_file = request.files.get('book_file')
+    thumbnail = request.files.get('thumbnail')
+
+    if not all([title, author, category, book_file, thumbnail]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # unique filenames
+    book_name = f"{uuid.uuid4()}_{book_file.filename}"
+    thumb_name = f"{uuid.uuid4()}_{thumbnail.filename}"
+
+    book_path = os.path.join(BOOKS_DIR, book_name)
+    thumb_path = os.path.join(THUMBNAILS_DIR, thumb_name)
+
+    book_file.save(book_path)
+    thumbnail.save(thumb_path)
+
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO books (title, author, category, description, file_name, file_path, thumbnail_name, thumbnail_path, file_size)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (title, author, category, description, book_name, book_path, thumb_name, thumb_path, os.path.getsize(book_path)))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Book uploaded successfully!"})
+
+
+# 📸 Serve thumbnails
+@app.route('/thumbnails/<path:filename>')
+def serve_thumbnail(filename):
+    return send_from_directory(THUMBNAILS_DIR, filename)
+
+
+# 📕 Serve book files
+@app.route('/books/<path:filename>')
+def serve_books(filename):
+    return send_from_directory(BOOKS_DIR, filename)
+
+
+# ⚙️ Serve admin and static files
 @app.route('/admin/<path:path>')
 def serve_admin(path):
     return send_from_directory('admin', path)
 
 
-# 🧩 Serve other static files
 @app.route('/<path:path>')
 def static_files(path):
     return send_from_directory('.', path)
 
 
-# 🚀 Run app (Render auto port fix)
+# 🚀 Run app
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
