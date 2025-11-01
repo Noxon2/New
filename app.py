@@ -106,7 +106,7 @@ def upload_book():
 @app.route('/api/books', methods=['GET'])
 def get_books():
     try:
-        res = supabase.table("books").select("*").order("upload_date", {"ascending": False}).execute()
+        res = supabase.table("books").select("*").order("upload_date", desc=True).execute()
         rows = res.data or []
         result = []
         for b in rows:
