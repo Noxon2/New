@@ -1,60 +1,29 @@
-# main.py
-from flask import Flask, request, jsonify, redirect, send_from_directory
+# app.py
+import os
+import uuid
+from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
-import sqlite3, os, uuid
 from supabase import create_client, Client
+from datetime import datetime
 
-app = Flask(__name__, static_folder='.', static_url_path='')
+app = Flask(__name__)
 CORS(app)
 
 # -----------------------
-# CONFIG (use env vars)
+# Config (from env)
 # -----------------------
-# Set these env vars in your host (Render / Heroku / local)
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xmsykiasnebfqzqdfjyo.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhtc3lraWFzbmViZnF6cWRmanlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE4MzY4ODgsImV4cCI6MjA3NzQxMjg4OH0.rxvCCgDh9tQ1Uu2JY1_SIdPYwHmZjDNqhbVNxtUsKgc")  # set in env
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")  # anon or service_role (service_role gives more privileges)
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "uploads")
 
-# local DB file (keeps metadata). Change path if you want different location.
-DB_PATH = os.path.join(os.getcwd(), "books.db")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set as environment variables.")
 
-# Supabase bucket name (you said 'uploads')
-SUPABASE_BUCKET = "uploads"
-
-# create client
+# create supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -----------------------
-# DB + folders setup
-# -----------------------
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS books(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT,
-        author TEXT,
-        category TEXT,
-        description TEXT,
-        file_name TEXT,
-        file_url TEXT,
-        thumbnail_name TEXT,
-        thumbnail_url TEXT,
-        file_size REAL,
-        downloads INTEGER DEFAULT 0,
-        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-# -----------------------
-# Helper: readable size
+# Helpers
 # -----------------------
 def readable_mb(mb_float):
     try:
@@ -78,7 +47,7 @@ def admin_login():
     return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 # -----------------------
-# Upload route (Supabase)
+# Upload route (Supabase storage + DB)
 # -----------------------
 @app.route('/api/books', methods=['POST'])
 def upload_book():
@@ -91,20 +60,20 @@ def upload_book():
     thumbnail = request.files.get('thumbnail')
 
     if not all([title, author, category, book_file, thumbnail]):
-        return jsonify({'error': 'Missing required field'}), 400
+        return jsonify({'error': 'Missing required field (title, author, category, book_file, thumbnail)'}), 400
 
     # unique names to avoid collisions
     uid = str(uuid.uuid4())
     book_name = f"books/{uid}_{book_file.filename}"
     thumb_name = f"thumbnails/{uid}_{thumbnail.filename}"
 
-    # Read bytes (we must read file-like into bytes to upload)
+    # Read bytes
     book_bytes = book_file.read()
     thumbnail_bytes = thumbnail.read()
 
-    # Upload to Supabase bucket (public bucket)
+    # Upload to Supabase storage
     try:
-        # upload returns dict on success or raises
+        # If upload accepts bytes directly (supabase-py), we can pass bytes
         supabase.storage.from_(SUPABASE_BUCKET).upload(book_name, book_bytes)
         supabase.storage.from_(SUPABASE_BUCKET).upload(thumb_name, thumbnail_bytes)
     except Exception as e:
@@ -120,14 +89,26 @@ def upload_book():
     except:
         file_size_mb = 0.0
 
-    # save metadata in sqlite
-    conn = get_db()
-    conn.execute('''INSERT INTO books
-        (title, author, category, description, file_name, file_url, thumbnail_name, thumbnail_url, file_size)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (title, author, category, desc, book_file.filename, book_url, thumbnail.filename, thumb_url, file_size_mb))
-    conn.commit()
-    conn.close()
+    # Insert metadata into Supabase DB (table: books)
+    try:
+        insert_data = {
+            "title": title,
+            "author": author,
+            "category": category,
+            "description": desc,
+            "file_url": book_url,
+            "thumbnail_url": thumb_url,
+            "file_size": file_size_mb,
+            "downloads": 0,
+            # upload_date column has default now() on DB, but we can also pass
+            "upload_date": datetime.utcnow().isoformat()
+        }
+        res = supabase.table("books").insert(insert_data).execute()
+        if res.error:
+            # res.error may hold info depending on client version
+            return jsonify({'error': 'Failed to insert record into database', 'detail': str(res.error)}), 500
+    except Exception as e:
+        return jsonify({'error': f"Insert to database failed: {e}"}), 500
 
     return jsonify({'message': 'Book uploaded successfully!', 'file_url': book_url, 'thumbnail_url': thumb_url}), 200
 
@@ -136,103 +117,157 @@ def upload_book():
 # -----------------------
 @app.route('/api/books', methods=['GET'])
 def get_books():
-    conn = get_db()
-    rows = conn.execute('SELECT * FROM books ORDER BY upload_date DESC').fetchall()
-    conn.close()
-    result = []
-    for b in rows:
-        result.append({
-            'id': b['id'],
-            'title': b['title'],
-            'author': b['author'],
-            'category': b['category'],
-            'description': b['description'],
-            'downloads': b['downloads'],
-            'upload_date': b['upload_date'],
-            'file_name': b['file_name'],
-            'file_size': b['file_size'],              # float MB (for JS to format if needed)
-            'file_size_str': readable_mb(b['file_size']),
-            'thumbnail_url': b['thumbnail_url'],
-            'file_url': b['file_url']
-        })
-    return jsonify(result)
+    try:
+        # select all, order by upload_date descending
+        res = supabase.table("books").select("*").order("upload_date", {"ascending": False}).execute()
+        if res.error:
+            return jsonify({'error': 'Failed to fetch books', 'detail': str(res.error)}), 500
+        rows = res.data or []
+        result = []
+        for b in rows:
+            result.append({
+                'id': b.get('id'),
+                'title': b.get('title'),
+                'author': b.get('author'),
+                'category': b.get('category'),
+                'description': b.get('description'),
+                'downloads': b.get('downloads', 0),
+                'upload_date': b.get('upload_date') or b.get('created_at'),
+                'file_name': None,
+                'file_size': b.get('file_size'),
+                'file_size_str': readable_mb(b.get('file_size')),
+                'thumbnail_url': b.get('thumbnail_url'),
+                'file_url': b.get('file_url')
+            })
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch books: {e}'}), 500
 
 # -----------------------
 # Download route (increments count, then redirect to Supabase URL)
 # -----------------------
 @app.route('/api/books/<int:book_id>/download', methods=['GET'])
 def download_book(book_id):
-    conn = get_db()
-    book = conn.execute('SELECT * FROM books WHERE id=?', (book_id,)).fetchone()
-    if not book:
-        conn.close()
-        return jsonify({'error': 'Book not found'}), 404
+    try:
+        # fetch book
+        res = supabase.table("books").select("*").eq("id", book_id).single().execute()
+        if res.error or not res.data:
+            return jsonify({'error': 'Book not found'}), 404
+        book = res.data
 
-    # increment count
-    conn.execute('UPDATE books SET downloads = downloads + 1 WHERE id=?', (book_id,))
-    conn.commit()
-    conn.close()
+        # increment downloads
+        updates = {"downloads": (book.get("downloads") or 0) + 1}
+        upd = supabase.table("books").update(updates).eq("id", book_id).execute()
+        # ignore upd.error for now, still proceed to redirect
 
-    # redirect to Supabase public URL so browser downloads from Supabase
-    file_url = book['file_url']
-    return redirect(file_url, code=302)
+        file_url = book.get('file_url')
+        if not file_url:
+            return jsonify({'error': 'File URL missing for this book'}), 500
+
+        return redirect(file_url, code=302)
+    except Exception as e:
+        return jsonify({'error': f'Error during download: {e}'}), 500
 
 # -----------------------
-# Update / Delete routes (same behaviour)
+# Update book metadata
 # -----------------------
 @app.route('/api/books/<int:book_id>', methods=['PUT'])
 def update_book(book_id):
-    data = request.get_json()
-    title = data.get('title')
-    author = data.get('author')
-    category = data.get('category')
-    conn = get_db()
-    conn.execute('UPDATE books SET title=?, author=?, category=? WHERE id=?',
-                 (title, author, category, book_id))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'message': 'Book updated successfully!'})
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Missing JSON body'}), 400
+        allowed = {k: data[k] for k in ('title', 'author', 'category', 'description') if k in data}
+        if not allowed:
+            return jsonify({'error': 'No updatable fields provided'}), 400
 
+        res = supabase.table("books").update(allowed).eq("id", book_id).execute()
+        if res.error:
+            return jsonify({'error': 'Failed to update book', 'detail': str(res.error)}), 500
+        return jsonify({'success': True, 'message': 'Book updated successfully!'})
+    except Exception as e:
+        return jsonify({'error': f'Update failed: {e}'}), 500
+
+# -----------------------
+# Delete book (DB record + optional storage delete)
+# -----------------------
 @app.route('/api/books/<int:book_id>', methods=['DELETE'])
 def delete_book(book_id):
-    # Note: This deletes DB record only. If you also want to remove from Supabase storage,
-    # you can call supabase.storage.from_(SUPABASE_BUCKET).remove([path]) here.
-    conn = get_db()
-    conn.execute('DELETE FROM books WHERE id=?', (book_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'message': 'Book deleted successfully!'})
+    try:
+        # find record
+        res = supabase.table("books").select("*").eq("id", book_id).single().execute()
+        if res.error or not res.data:
+            return jsonify({'error': 'Book not found'}), 404
+        book = res.data
+
+        # attempt to remove files from storage (optional)
+        # We expect file_url like: {SUPABASE_URL}/storage/v1/object/public/<bucket>/<path>
+        # Extract path after bucket/
+        try:
+            file_url = book.get('file_url', '')
+            thumb_url = book.get('thumbnail_url', '')
+            def extract_path(url):
+                # safe parsing: find "/object/public/<bucket>/" and get rest
+                marker = f"/object/public/{SUPABASE_BUCKET}/"
+                idx = url.find(marker)
+                if idx != -1:
+                    return url[idx + len(marker):]
+                return None
+            file_path = extract_path(file_url)
+            thumb_path = extract_path(thumb_url)
+
+            to_remove = []
+            if file_path:
+                to_remove.append(file_path)
+            if thumb_path:
+                to_remove.append(thumb_path)
+            if to_remove:
+                try:
+                    supabase.storage.from_(SUPABASE_BUCKET).remove(to_remove)
+                except Exception:
+                    # ignore storage delete errors (we still delete DB record)
+                    pass
+        except Exception:
+            pass
+
+        # delete DB record
+        delr = supabase.table("books").delete().eq("id", book_id).execute()
+        if delr.error:
+            return jsonify({'error': 'Failed to delete record', 'detail': str(delr.error)}), 500
+
+        return jsonify({'success': True, 'message': 'Book deleted successfully!'})
+    except Exception as e:
+        return jsonify({'error': f'Delete failed: {e}'}), 500
 
 # -----------------------
 # Admin stats for dashboard
 # -----------------------
 @app.route('/api/admin/stats', methods=['GET'])
 def admin_stats():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM books')
-    total_books = cur.fetchone()[0] or 0
-    cur.execute('SELECT SUM(downloads) FROM books')
-    total_downloads = cur.fetchone()[0] or 0
-    cur.execute('SELECT SUM(file_size) FROM books')
-    total_size_mb = cur.fetchone()[0] or 0.0
-    conn.close()
-    return jsonify({
-        "total_books": total_books,
-        "total_downloads": total_downloads,
-        "total_size": f"{round(total_size_mb, 2)} MB"
-    })
+    try:
+        total_books = supabase.table("books").select("id", count="exact").execute()
+        # fallback approach: fetch and count
+        res = supabase.table("books").select("id, downloads, file_size").execute()
+        if res.error:
+            return jsonify({'error': 'Failed to fetch stats', 'detail': str(res.error)}), 500
+        rows = res.data or []
+        total_books = len(rows)
+        total_downloads = sum((r.get('downloads') or 0) for r in rows)
+        total_size_mb = sum((r.get('file_size') or 0) for r in rows)
+        return jsonify({
+            "total_books": total_books,
+            "total_downloads": total_downloads,
+            "total_size": f"{round(total_size_mb, 2)} MB"
+        })
+    except Exception as e:
+        return jsonify({'error': f'Stats failed: {e}'}), 500
 
 # -----------------------
-# Fallback frontends + root
+# Root
 # -----------------------
 @app.route('/')
 def home():
-    return "✅ OceanBooks backend (Supabase storage) is live!"
-
-@app.route('/<path:path>')
-def static_files(path):
-    return send_from_directory('.', path)
+    return "✅ OceanBooks backend (Supabase storage + DB) is live!"
 
 # -----------------------
 # Run
