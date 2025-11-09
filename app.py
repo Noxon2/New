@@ -1,4 +1,3 @@
-# app.py
 import os
 import uuid
 from flask import Flask, request, jsonify, redirect
@@ -46,7 +45,7 @@ def admin_login():
     return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 # -----------------------
-# Upload book
+# Upload book (old standard way)
 # -----------------------
 @app.route('/api/books', methods=['POST'])
 def upload_book():
@@ -92,13 +91,76 @@ def upload_book():
 
     try:
         res = supabase.table("books").insert(insert_data).execute()
-        # fix: check data, not error
         if not res.data:
             return jsonify({'error': 'Failed to insert record into database', 'detail': str(res)}), 500
     except Exception as e:
         return jsonify({'error': f"Insert to database failed: {e}"}), 500
 
     return jsonify({'message': 'Book uploaded successfully!', 'file_url': book_url, 'thumbnail_url': thumb_url}), 200
+
+# -----------------------
+# ✅ NEW: Direct Upload - Get Signed URL
+# -----------------------
+@app.route('/api/books/signed-upload', methods=['POST'])
+def generate_signed_upload_url():
+    try:
+        data = request.get_json()
+        filename = data.get("filename")
+        folder = data.get("folder", "books")
+
+        if not filename:
+            return jsonify({"error": "Filename is required"}), 400
+
+        uid = str(uuid.uuid4())
+        object_name = f"{folder}/{uid}_{filename}"
+
+        signed_url_data = supabase.storage.from_(SUPABASE_BUCKET).create_signed_upload_url(object_name)
+
+        upload_url = signed_url_data.get("url")
+        return jsonify({
+            "upload_url": upload_url,
+            "object_name": object_name,
+            "public_url": f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{object_name}"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# -----------------------
+# ✅ NEW: Direct Upload - Confirm & Save to DB
+# -----------------------
+@app.route("/api/books/confirm", methods=["POST"])
+def confirm_book_upload():
+    try:
+        data = request.get_json()
+        title = data.get("title")
+        author = data.get("author")
+        category = data.get("category")
+        description = data.get("description")
+        file_url = data.get("file_url")
+        thumbnail_url = data.get("thumbnail_url")
+
+        if not all([title, author, category, file_url, thumbnail_url]):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        insert_data = {
+            "title": title,
+            "author": author,
+            "category": category,
+            "description": description or "",
+            "file_url": file_url,
+            "thumbnail_url": thumbnail_url,
+            "downloads": 0,
+            "upload_date": datetime.utcnow().isoformat()
+        }
+
+        res = supabase.table("books").insert(insert_data).execute()
+        if not res.data:
+            return jsonify({"error": "Failed to insert record"}), 500
+
+        return jsonify({"message": "✅ Book saved successfully!", "data": res.data}), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Confirm failed: {e}"}), 500
 
 # -----------------------
 # Get all books
@@ -222,7 +284,7 @@ def admin_stats():
 # -----------------------
 @app.route('/')
 def home():
-    return "✅ OceanBooks backend (Supabase storage + DB) is live!"
+    return "✅ OceanBooks is live with Direct Upload Support!"
 
 # -----------------------
 # Run
